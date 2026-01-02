@@ -47,7 +47,8 @@ function displayTranscript(transcript) {
 
         const avatar = document.createElement('img');
         avatar.className = 'avatar';
-        avatar.src = msg.avatar_url || 'https://cdn.discordapp.com/embed/avatars/0.png';
+        // Use base64 avatar if available, otherwise fallback
+        avatar.src = msg.avatar_base64 || msg.avatar_url || 'https://cdn.discordapp.com/embed/avatars/0.png';
         avatar.alt = msg.username;
 
         const contentDiv = document.createElement('div');
@@ -118,10 +119,11 @@ function displayTranscript(transcript) {
                     });
                 }
 
-                if (embed.image && embed.image.url) {
+                if (embed.image) {
                     const img = document.createElement('img');
                     img.className = 'embed-image';
-                    img.src = embed.image.url;
+                    // Use base64 if available, otherwise try URL
+                    img.src = embed.image.base64 || embed.image.url;
                     embedDiv.appendChild(img);
                 }
 
@@ -138,12 +140,34 @@ function displayTranscript(transcript) {
 
         if (msg.attachments && msg.attachments.length > 0) {
             msg.attachments.forEach(att => {
-                const attLink = document.createElement('a');
-                attLink.className = 'attachment';
-                attLink.href = att.url;
-                attLink.target = '_blank';
-                attLink.textContent = `📎 ${att.name}`;
-                contentDiv.appendChild(attLink);
+                // Check if it's an image attachment with base64 data
+                if (att.base64 && att.contentType && att.contentType.startsWith('image/')) {
+                    const img = document.createElement('img');
+                    img.className = 'attachment-image';
+                    img.src = att.base64;
+                    img.alt = att.name;
+                    img.style.maxWidth = '100%';
+                    img.style.marginTop = '8px';
+                    img.style.borderRadius = '4px';
+                    contentDiv.appendChild(img);
+                } else if (att.base64) {
+                    // Non-image file with base64 data
+                    const attLink = document.createElement('a');
+                    attLink.className = 'attachment';
+                    attLink.href = att.base64;
+                    attLink.download = att.name;
+                    attLink.textContent = `📎 ${att.name}`;
+                    contentDiv.appendChild(attLink);
+                } else if (att.url) {
+                    // Fallback to URL if no base64 (may be broken if channel deleted)
+                    const attLink = document.createElement('a');
+                    attLink.className = 'attachment';
+                    attLink.href = att.url;
+                    attLink.target = '_blank';
+                    attLink.textContent = `📎 ${att.name} (external link)`;
+                    attLink.style.opacity = '0.6';
+                    contentDiv.appendChild(attLink);
+                }
             });
         }
 
@@ -165,6 +189,57 @@ function displayTranscript(transcript) {
         `;
         messagesContainer.appendChild(reasonDiv);
     }
+}
+
+// Helper function to convert image URL to base64 (for use when creating transcripts)
+async function convertImageToBase64(url) {
+    try {
+        const response = await fetch(url);
+        const blob = await response.blob();
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+        });
+    } catch (error) {
+        console.error('Error converting image to base64:', error);
+        return null;
+    }
+}
+
+// Helper function to process transcript and embed images (call this when SAVING transcript)
+async function processTranscriptForStorage(transcript) {
+    for (const msg of transcript.messages) {
+        // Convert avatar to base64
+        if (msg.avatar_url && !msg.avatar_base64) {
+            msg.avatar_base64 = await convertImageToBase64(msg.avatar_url);
+        }
+
+        // Convert attachments to base64
+        if (msg.attachments) {
+            for (const att of msg.attachments) {
+                if (att.url && !att.base64) {
+                    att.base64 = await convertImageToBase64(att.url);
+                    // Store content type for proper display
+                    if (!att.contentType) {
+                        att.contentType = att.url.match(/\.(png|jpe?g|gif|webp)/i) ? 
+                            `image/${att.url.split('.').pop().toLowerCase()}` : 'application/octet-stream';
+                    }
+                }
+            }
+        }
+
+        // Convert embed images to base64
+        if (msg.embeds) {
+            for (const embed of msg.embeds) {
+                if (embed.image && embed.image.url && !embed.image.base64) {
+                    embed.image.base64 = await convertImageToBase64(embed.image.url);
+                }
+            }
+        }
+    }
+    return transcript;
 }
 
 loadTranscript();
